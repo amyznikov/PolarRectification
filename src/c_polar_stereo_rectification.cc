@@ -68,7 +68,7 @@ bool c_polar_stereo_rectification::compute_epipoles(const cv::Matx33d & F,
     cv::Point2d * output_epipole0, cv::Point2d * output_epipole1)
 {
 
-#if 0
+#if 1
 
   try {
     cv::SVD svd(F);
