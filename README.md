@@ -12,8 +12,10 @@ This is my initial implementation of "M. Pollefeys, R. Koch and L. Van Gool, A s
 
 
 Camara rotation is compensated using homography estimated based on cv::findEssentialMat() and cv::recoverPose().
-This compensation is required to make the camera exes parallel (looking into the same direction) when camera is rotating between frames.
+This compensation is required to make the camera axes parallel (seeing in the same direction) when camera is rotating between frames.
 After applying such 'derotation homography' the disparities become directed into single side (from left to right when moving forward).
+
+TODO: Check if cv::warpPolar() could be usefull.
 
 
 Example images:

@@ -182,7 +182,7 @@ static bool detect_and_match_key_points(const cv::Mat images[2],
  * */
 static bool recover_pose(const cv::Matx33d & cameraMatrix,
     const std::vector<cv::Point2f> matched_keypoints[2],
-    cv::Matx33d & R, cv::Vec3d T)
+    cv::Matx33d & R, cv::Vec3d & T)
 {
   const int method = cv::LMEDS;
   const double prob = 0.999;
