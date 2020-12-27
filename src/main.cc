@@ -10,6 +10,42 @@
 #include <opencv2/xfeatures2d.hpp>
 
 
+
+/**
+ * @brief Dump 3x3 matrix
+ * */
+static void pmat(const cv::Matx33d & F, const std::string & name)
+{
+  fprintf(stderr, "%s: {\n"
+      "%+12.6f\t%+12.6f\t%+12.6f\n"
+      "%+12.6f\t%+12.6f\t%+12.6f\n"
+      "%+12.6f\t%+12.6f\t%+12.6f\n"
+      "}\n",
+      name.c_str(),
+      F(0, 0), F(0, 1), F(0, 2),
+      F(1, 0), F(1, 1), F(1, 2),
+      F(2, 0), F(2, 1), F(2, 2));
+
+}
+
+/**
+ * @brief Dump 3x1 vector
+ * */
+static void pmat(const cv::Vec3d & T, const std::string & name)
+{
+  fprintf(stderr, "%s: {\n"
+      "%+12.6f\n"
+      "%+12.6f\n"
+      "%+12.6f\n"
+      "}\n",
+      name.c_str(),
+      T(0),
+      T(1),
+      T(2));
+
+}
+
+
 /**
  * @brief Detect and match SURF keypoints on pair of images
  * */
@@ -40,7 +76,7 @@ static bool detect_and_match_key_points(const cv::Mat images[2],
    * SURF detector parameters
    * */
   static const struct {
-    double hessianThreshold = 200;
+    double hessianThreshold = 100;
     int nOctaves = 2;
     int nOctaveLayers = 1;
     bool extended = false;
@@ -132,56 +168,95 @@ static bool detect_and_match_key_points(const cv::Mat images[2],
 
 
   /*
-   * Minimum 7 points is required for fundamentakl matrix estimation
+   * Minimum 7 points is required for fundamental matrix estimation
    * */
   return best_matches.size() >= 7;
 }
 
 
+
 /**
- *  @brief Find fundamental matrix using matched keypoints
+ *  @brief Combine findEssentialMat() and recoverPose() into single call
+ *  and estimate rotation matrix and translation direction betweeen two frames
+ *  given by matched key points.
  * */
-static bool find_fundamental_matrix(const cv::Mat images[2],
-    cv::Matx33d & output_fundamental_matrix)
+static bool recover_pose(const cv::Matx33d & cameraMatrix,
+    const std::vector<cv::Point2f> matched_keypoints[2],
+    cv::Matx33d & R, cv::Vec3d T)
 {
+  const int method = cv::LMEDS;
+  const double prob = 0.999;
+  const double threshold = 1.0;
 
-  /*
-   * Detect and match keypoints on pair of input images
-   * */
-  std::vector<cv::Point2f> matched_keypoints[2];
+  const cv::Mat E =
+      cv::findEssentialMat(matched_keypoints[0], matched_keypoints[1],
+          cameraMatrix,
+          cv::LMEDS,
+          prob, threshold);
 
-  if ( !detect_and_match_key_points(images, matched_keypoints) ) {
-
-    fprintf(stderr, "%s(): detect_and_match_key_points() fails\n",
-        __func__);
-
+  if ( E.empty() ) {
+    fprintf(stderr, "cv::findEssentialMat() fails");
     return false;
   }
 
+  int ngood = cv::recoverPose(E,
+      matched_keypoints[0],
+      matched_keypoints[1],
+      cameraMatrix,
+      R, T);
+
+  return ngood > 0;
+}
 
 
-  /*
-   * Find fundamental matrix using matched points
-   * */
-  const cv::Mat F =
+/**
+ *  @brief Estimate fundamental matrix and homography required to derotate images (make optical axes 'parallel')
+ *  Estimated fundamental matrix is computed after applyimg the homography to second image
+ * */
+static bool estimate_pose(const cv::Mat images[2],
+    const cv::Matx33d & cameraMatrix,
+    cv::Matx33d & output_rotation_matrix,
+    cv::Vec3d & output_translation_vector,
+    cv::Matx33d & output_fundamental_matrix,
+    cv::Matx33d & output_homography1)
+{
+  std::vector<cv::Point2f> matched_keypoints[2];
+
+  cv::Matx33d R, H;
+  cv::Vec3d T;
+
+  if ( !detect_and_match_key_points(images, matched_keypoints) ) {
+    fprintf(stderr, "%s(): %d detect_and_match_key_points() fails\n", __func__, __LINE__);
+    return false;
+  }
+
+  if ( !recover_pose(cameraMatrix, matched_keypoints, R, T) ) {
+    fprintf(stderr, "%s(): %d recover_pose() fails\n", __func__, __LINE__);
+    return false;
+  }
+
+  // compute 'derotation' homography required to make optical axes parallel
+  H = cameraMatrix * R.inv() * cameraMatrix.inv();
+
+  // apply 'derotation' homography for second keypoints array before fundamental matrix estimation
+  cv::perspectiveTransform(matched_keypoints[1],
+      matched_keypoints[1],
+      H);
+
+  cv::Mat F =
       cv::findFundamentalMat(matched_keypoints[0], matched_keypoints[1],
           cv::noArray(),
           cv::FM_LMEDS);
 
   if ( F.empty() ) {
-
-    fprintf(stderr, "%s(): findFundamentalMat() fails\n",
-        __func__);
-
+    fprintf(stderr, "%s(): %d findFundamentalMat() fails\n", __func__, __LINE__);
     return false;
   }
 
-
-
-  /*
-   * Return fundamental maxtrix to caller
-   * */
+  output_rotation_matrix = R;
+  output_translation_vector = T;
   output_fundamental_matrix = F;
+  output_homography1 = H;
 
   return true;
 }
@@ -204,11 +279,24 @@ int main(int argc, char *argv[])
   /* Reverse remapped rectified images */
   cv::Mat reverse_transfrormed_images[2];
 
-  /* Fundamental_matrix */
-  cv::Matx33d F;  //
-
   /* Stereo rectificator */
   c_polar_stereo_rectification rectification;
+
+
+  /* Camera ID for camera matrix */
+  enum camera_id {
+    camera_unknown = -1,
+    camera_kitti_0,
+    camera_kitti_1,
+    camera_kitti_2,
+    camera_kitti_3,
+    camera_india_f
+  } camera = camera_unknown;
+
+
+  /* Camera Matrix  */
+  cv::Matx33d cameraMatrix;
+
 
   /*
    * Parse command line arguments
@@ -219,17 +307,48 @@ int main(int argc, char *argv[])
 
       fprintf(stdout,
           "Usage:\n"
-          "    PolarRectification [OPTIONS] image1 image2\n"
+          "    PolarRectification image1 image2 ARGS\n"
           "\n"
-          "OPTIONS:\n"
-          "   NONE\n"
+          "ARGS:\n"
+          "  -c <camera-name>\n"
+          "        Specify camera name: one of kitti0 kitti1 kitti2 kitti3 indiaf\n"
           "\n"
 
       );
       return 0;
     }
 
-    if ( input_file_names[0].empty() ) {  /* first input file name */
+
+    if ( strcmp(argv[i], "-c") == 0 ) { // camera name
+      if ( ++i >= argc ) {
+        fprintf(stderr, "Command line error: No camera name specified after '%s' option\n",
+            argv[i - 1]);
+        return 1;
+      }
+
+      if ( strcasecmp(argv[i], "kitti0") == 0 ) {
+        camera = camera_kitti_0;
+      }
+      else if ( strcasecmp(argv[i], "kitti1") == 0 ) {
+        camera = camera_kitti_1;
+      }
+      else if ( strcasecmp(argv[i], "kitti2") == 0 ) {
+        camera = camera_kitti_2;
+      }
+      else if ( strcasecmp(argv[i], "kitti3") == 0 ) {
+        camera = camera_kitti_3;
+      }
+      else if ( strcasecmp(argv[i], "indiaf") == 0 ) {
+        camera = camera_india_f;
+      }
+      else {
+        fprintf(stderr, "Command line error: Invalid camera name '%s' specified\n",
+            argv[i]);
+        return 1;
+      }
+    }
+
+    else if ( input_file_names[0].empty() ) {  /* first input file name */
       input_file_names[0] = argv[i];
     }
 
@@ -256,6 +375,68 @@ int main(int argc, char *argv[])
 
 
 
+
+
+
+  /*
+   * Select camera matrix based on user-specified camera id
+   */
+  if ( camera == camera_unknown ) {
+    fprintf(stderr, "No camera name specified in command line, "
+        "can not select appropriate camera matrix\n");
+    return 1;
+  }
+
+
+  if ( camera == camera_india_f ) {
+
+    cameraMatrix = cv::Matx33d(
+        3654.002995893292, 0, 929.8061151563577,
+        0, 3685.505662347394, 640.5609325644043,
+        0, 0, 1);
+
+  }
+  else {
+      /* Data extracted from kitti/raw/2011_09_26/calib_cam_to_cam.txt */
+
+    static double P_rect[4][3 * 4] = {
+        /* P_rect_00: */
+        {
+            7.215377e+02, 0.000000e+00, 6.095593e+02, 0.000000e+00,
+            0.000000e+00, 7.215377e+02, 1.728540e+02, 0.000000e+00,
+            0.000000e+00, 0.000000e+00, 1.000000e+00, 0.000000e+00
+        },
+        /* P_rect_01: */
+        {
+            7.215377e+02, 0.000000e+00, 6.095593e+02, -3.875744e+02,
+            0.000000e+00, 7.215377e+02, 1.728540e+02, 0.000000e+00,
+            0.000000e+00, 0.000000e+00, 1.000000e+00, 0.000000e+00
+        },
+        /* P_rect_02: */
+        {
+            7.215377e+02, 0.000000e+00, 6.095593e+02, 4.485728e+01,
+            0.000000e+00, 7.215377e+02, 1.728540e+02, 2.163791e-01,
+            0.000000e+00, 0.000000e+00, 1.000000e+00, 2.745884e-03
+
+        },
+        /* P_rect_03: */
+        {
+            7.215377e+02, 0.000000e+00, 6.095593e+02, -3.395242e+02,
+            0.000000e+00, 7.215377e+02, 1.728540e+02, 2.199936e+00,
+            0.000000e+00, 0.000000e+00, 1.000000e+00, 2.729905e-03
+        }
+    };
+
+    const int camera_index =
+        camera - camera_kitti_0;
+
+    cameraMatrix =
+        cv::Mat1d(3, 4, P_rect[camera_index])(cv::Rect(0, 0, 3, 3));
+  }
+
+  pmat(cameraMatrix, "cameraMatrix");
+
+
   /*
    * My OpenCV build has problems with OCL on my machine.
    * Comment out this line if you want to allow OCL in OpenCV
@@ -276,23 +457,30 @@ int main(int argc, char *argv[])
   }
 
 
-
   /*
-   * Find fundamental matrix using pair of input images
-   * */
-  if ( !find_fundamental_matrix(input_images, F) ) {
-    fprintf(stderr, "find_fundamental_matrix() fails\n");
+   * Estimate fundamental matrix and 'derotation' homography required to make camera axes parallel
+   */
+
+  cv::Matx33d F; /* Fundamental matrix */
+  cv::Matx33d R; /* Rotation matrix between frames */
+  cv::Vec3d T; /* Translation vector between frames */
+  cv::Matx33d H; /* 'Derotation' homography between frames */
+
+  if ( !estimate_pose(input_images, cameraMatrix, R, T, F, H) ) {
+    fprintf(stderr, "estimate_pose() fails\n");
     return 1;
   }
 
-  fprintf(stderr, "F: {\n"
-      "%+12.6f\t%+12.6f\t%+12.6f\n"
-      "%+12.6f\t%+12.6f\t%+12.6f\n"
-      "%+12.6f\t%+12.6f\t%+12.6f\n"
-      "}\n",
-      F(0,0),F(0,1),F(0,2),
-      F(1,0),F(1,1),F(1,2),
-      F(2,0),F(2,1),F(2,2));
+  pmat(F, "F");
+  pmat(R, "R");
+  pmat(T, "T");
+
+  /*
+   * Apply 'derotation' homography to second image  and dump to disk
+   * */
+  cv::warpPerspective(input_images[1], input_images[1], H, input_images[1].size());
+  cv::imwrite("warpPerspective1.png", input_images[1]);
+
 
 
   /*
@@ -302,6 +490,11 @@ int main(int argc, char *argv[])
     fprintf(stderr, "rectification.compute() fails\n");
     return 1;
   }
+
+  fprintf(stderr, "epipole1: x=%g y=%g  epipole2: x=%g y=%g\n",
+      rectification.epipole(0).x, rectification.epipole(0).y,
+      rectification.epipole(1).x, rectification.epipole(1).y);
+
 
 
   /*

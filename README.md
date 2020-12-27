@@ -7,18 +7,33 @@ Stereo images polar rectification for general motion.
 This is my initial implementation of "M. Pollefeys, R. Koch and L. Van Gool, A simple and efficient rectification method for general motion", 
 [http://www.inf.ethz.ch/personal/pomarc/pubs/PollefeysICCV99.pdf](http://www.inf.ethz.ch/personal/pomarc/pubs/PollefeysICCV99.pdf).
 
- This code is heavily based on the Néstor Morales Hernández 'PolarCalibration' project 
+ This code is heavily based on the code from Néstor Morales Hernández 'PolarCalibration' 
  [https://github.com/nestormh/PolarCalibration](https://github.com/nestormh/PolarCalibration)
 
 
-It seems the result is quite sensitive to image distortion, rolling shutter effects, as well as presense of moving objects on scene. 
+Camara rotation is compensated using homography estimated based on cv::findEssentialMat() and cv::recoverPose().
+This compensation is required to make the camera exes parallel (looking into the same direction) when camera is rotating between frames.
+After applying such 'derotation homography' the disparities become directed into single side (from left to right when moving forward).
 
 
+Example images:
 
-Example image:
+![test-images/2011_09_26_drive_0001_sync-63-64/2011_09_26_drive_0001_sync-63-64.gif](test-images/2011_09_26_drive_0001_sync-63-64/2011_09_26_drive_0001_sync-63-64.gif)
 
-![test-images/kitti1/0000000063.png](test-images/kitti1/0000000063.png)
+![test-images/2011_09_26_drive_0001_sync-63-64/2011_09_26_drive_0001_sync-63-64-polar.gif](test-images/2011_09_26_drive_0001_sync-63-64/2011_09_26_drive_0001_sync-63-64-polar.gif)
 
 
-![test-images/kitti1/2011_09_26_drive_0001_sync.gif](test-images/kitti1/2011_09_26_drive_0001_sync.gif)
+--
+
+![test-images/2011_09_26_drive_0005_sync-83-84/2011_09_26_drive_0005_sync-83-84.gif](test-images/2011_09_26_drive_0005_sync-83-84/2011_09_26_drive_0005_sync-83-84.gif)
+
+![test-images/2011_09_26_drive_0005_sync-83-84/2011_09_26_drive_0005_sync-83-84-polar.gif](test-images/2011_09_26_drive_0005_sync-83-84/2011_09_26_drive_0005_sync-83-84-polar.gif)
+
+
+--
+
+![test-images/India/India.gif](test-images/India/India.gif)
+
+![test-images/India/India-polar.gif](test-images/India/India-polar.gif)
+
 
