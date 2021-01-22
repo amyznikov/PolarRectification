@@ -173,6 +173,43 @@ static bool detect_and_match_key_points(const cv::Mat images[2],
   return best_matches.size() >= 7;
 }
 
+/**
+ * @brief Compute median value and direction of the movements of keypoints beyween frames.
+ *
+ * The key points are expected to move between frames along epipolar lines from or toward to epipole.
+ * This routine computes the median offset and it's direction (sign).
+ * */
+static double median_radial_flow(const cv::Point2d & e0, const cv::Point2d & e1,
+    const std::vector<cv::Point2f> & keypoints0, const std::vector<cv::Point2f> & keypoints1,
+    const cv::Mat1b & mask)
+{
+  std::vector<double> offsets;
+
+  offsets.reserve(mask.rows);
+
+  /*
+   * Assume that optical axes of both frames are already parallel,
+   * therefore epipoles must coinside on both frames (pixel coordinates must be equal
+   * */
+  const cv::Point2d e = 0.5 * (e0 + e1);
+
+  for ( int i = 0; i < mask.rows; ++i ) {
+    if ( mask[i] ) {
+
+      const cv::Point2f & kp0 = keypoints0[i];
+      const cv::Point2f & kp1 = keypoints1[i];
+
+      const double r0 = cv::norm(cv::Vec2d(kp0.x - e.x, kp0.y - e.y));
+      const double r1 = cv::norm(cv::Vec2d(kp1.x - e.x, kp1.y - e.y));
+
+      offsets.emplace_back(r1 - r0);
+    }
+  }
+
+  std::sort(offsets.begin(), offsets.end());
+
+  return offsets[offsets.size() / 2];
+}
 
 
 /**
@@ -180,78 +217,113 @@ static bool detect_and_match_key_points(const cv::Mat images[2],
  *  and estimate rotation matrix and translation direction betweeen two frames
  *  given by matched key points.
  * */
-static bool recover_pose(const cv::Matx33d & cameraMatrix,
-    const std::vector<cv::Point2f> matched_keypoints[2],
-    cv::Matx33d & R, cv::Vec3d & T)
-{
-  const int method = cv::LMEDS;
-  const double prob = 0.999;
-  const double threshold = 1.0;
 
-  const cv::Mat E =
-      cv::findEssentialMat(matched_keypoints[0], matched_keypoints[1],
-          cameraMatrix,
-          cv::LMEDS,
-          prob, threshold);
-
-  if ( E.empty() ) {
-    fprintf(stderr, "cv::findEssentialMat() fails");
-    return false;
-  }
-
-  int ngood = cv::recoverPose(E,
-      matched_keypoints[0],
-      matched_keypoints[1],
-      cameraMatrix,
-      R, T);
-
-  return ngood > 0;
-}
-
-
-/**
- *  @brief Estimate fundamental matrix and homography required to derotate images (make optical axes 'parallel')
- *  Estimated fundamental matrix is computed after applyimg the homography to second image
- * */
-static bool estimate_pose(const cv::Mat images[2],
+static bool estimate_pose(const cv::Mat input_images[2],
     const cv::Matx33d & cameraMatrix,
     cv::Matx33d & output_rotation_matrix,
     cv::Vec3d & output_translation_vector,
     cv::Matx33d & output_fundamental_matrix,
-    cv::Matx33d & output_homography1)
+    cv::Matx33d & output_homography1,
+    double * output_median_radial_flow)
 {
+  cv::Matx33d R, H;
+  cv::Matx33d F, E;
+  cv::Vec3d T;
+  cv::Mat1b mask;
+  cv::Point2d epipoles[2];
+  int ngood;
+
+
+  /*
+   * Detect and matcht key points on input images
+   * */
+
   std::vector<cv::Point2f> matched_keypoints[2];
 
-  cv::Matx33d R, H;
-  cv::Vec3d T;
-
-  if ( !detect_and_match_key_points(images, matched_keypoints) ) {
+  if ( !detect_and_match_key_points(input_images, matched_keypoints) ) {
     fprintf(stderr, "%s(): %d detect_and_match_key_points() fails\n", __func__, __LINE__);
     return false;
   }
 
-  if ( !recover_pose(cameraMatrix, matched_keypoints, R, T) ) {
-    fprintf(stderr, "%s(): %d recover_pose() fails\n", __func__, __LINE__);
-    return false;
-  }
+  /*
+   * Initial estimation of fundaemntal matrix using pairs of matched keypoint
+   */
+  F = cv::findFundamentalMat(matched_keypoints[0], matched_keypoints[1],
+      mask,
+      cv::FM_LMEDS,
+      0.5,
+      0.999);
 
-  // compute 'derotation' homography required to make optical axes parallel
-  H = cameraMatrix * R.inv() * cameraMatrix.inv();
+  /* Dump some debug info */
+  fprintf(stderr, "findFundamentalMat(): good points = %d / %d\n", cv::countNonZero(mask), mask.rows);
+  pmat(F, "F1");
 
-  // apply 'derotation' homography for second keypoints array before fundamental matrix estimation
+
+
+  /*
+   * Compute Essential Matrix from Fundamental Matrix
+   * */
+  E = cameraMatrix.t() * F * cameraMatrix;
+  pmat(E, "E");
+
+  /*
+   * Use of cv::recoverPose() for estimation of camera rotation between frames
+   * */
+  ngood = cv::recoverPose(E,
+      matched_keypoints[0],
+      matched_keypoints[1],
+      cameraMatrix,
+      R, T,
+      mask);
+
+  /* Dump some debug info */
+  fprintf(stderr, "recoverPose(): good points = %d / %d", ngood,  mask.rows);
+
+  pmat(R, "R");
+  pmat(T, "T");
+
+  /*
+   * Compute 'derotation' homography required to make optical axes parallel
+   * */
+  H = cameraMatrix * R.t() * cameraMatrix.inv();
+  pmat(H, "H");
+
+
+  /*
+   * Warp second frame keypoints to 'derotate' and re-estimate fundamental matrix.
+   * The resulting fundamental matrix shoud give the same coordinates of epipoles in both frames.
+   * */
+
   cv::perspectiveTransform(matched_keypoints[1],
       matched_keypoints[1],
       H);
 
-  cv::Mat F =
-      cv::findFundamentalMat(matched_keypoints[0], matched_keypoints[1],
-          cv::noArray(),
-          cv::FM_LMEDS);
+  F = cv::findFundamentalMat(matched_keypoints[0], matched_keypoints[1],
+      mask,
+      cv::FM_LMEDS,
+      0.5,
+      0.999);
 
-  if ( F.empty() ) {
-    fprintf(stderr, "%s(): %d findFundamentalMat() fails\n", __func__, __LINE__);
-    return false;
-  }
+  fprintf(stderr, "findFundamentalMat(): good points = %d / %d\n", cv::countNonZero(mask), mask.rows);
+  pmat(F, "F2");
+
+
+  /*
+   * Compute the direction of key points movement - FROM or TOWARDS the epipoles.
+   * The epipoles locations in pixels should coincide (be equal) on both frames if above homography and fundamental matrix was computed correctly.
+   */
+  c_polar_stereo_rectification::compute_epipoles(cv::Matx33d(F),
+      &epipoles[0], &epipoles[1]);
+
+  *output_median_radial_flow = median_radial_flow(epipoles[0], epipoles[1],
+      matched_keypoints[0], matched_keypoints[1],
+      mask);
+
+  fprintf(stderr, "Final epipoles: E0={%+g %+g} E1={%+g %+g} median_radial_flow=%+g\n",
+      epipoles[0].x, epipoles[0].y,
+      epipoles[1].x, epipoles[1].y,
+      *output_median_radial_flow);
+
 
   output_rotation_matrix = R;
   output_translation_vector = T;
@@ -260,6 +332,8 @@ static bool estimate_pose(const cv::Mat images[2],
 
   return true;
 }
+
+
 
 
 /**
@@ -466,7 +540,11 @@ int main(int argc, char *argv[])
   cv::Vec3d T; /* Translation vector between frames */
   cv::Matx33d H; /* 'Derotation' homography between frames */
 
-  if ( !estimate_pose(input_images, cameraMatrix, R, T, F, H) ) {
+  double median_radial_flow = 0; /* used to select between left/right frames for stereo matching */
+  int c0 = 0, c1 = 1; /* Indexes of right / left frames, computed below based on the direction of camera movement */
+  cv::Mat polar0, polar1; /* right / left rectified images */
+
+  if ( !estimate_pose(input_images, cameraMatrix, R, T, F, H, &median_radial_flow) ) {
     fprintf(stderr, "estimate_pose() fails\n");
     return 1;
   }
@@ -474,6 +552,18 @@ int main(int argc, char *argv[])
   pmat(F, "F");
   pmat(R, "R");
   pmat(T, "T");
+
+  /* select left / right image */
+  if ( median_radial_flow >= 0 ) {
+    c0 = 0;
+    c1 = 1;
+  }
+  else {
+    c0 = 1;
+    c1 = 0;
+  }
+  fprintf(stderr, "median_radial_flow=%+g c0=%d c1=%d\n", median_radial_flow, c0, c1);
+
 
   /*
    * Apply 'derotation' homography to second image  and dump to disk
@@ -504,6 +594,11 @@ int main(int argc, char *argv[])
       input_images[1], forward_transfrormed_images[1]);
 
 
+  /* Select which image is left and which is right for stereo matching */
+  polar0 = forward_transfrormed_images[c0];
+  polar1 = forward_transfrormed_images[c1];
+
+
   /*
    * Reverse remap rectified images
    * */
@@ -520,11 +615,11 @@ int main(int argc, char *argv[])
   cv::imwrite("input1.png",
       input_images[1]);
 
-  cv::imwrite("forward0.png",
-      forward_transfrormed_images[0]);
+  cv::imwrite("polar0.png",
+      polar0);
 
-  cv::imwrite("forward1.png",
-      forward_transfrormed_images[1]);
+  cv::imwrite("polar1.png",
+      polar1);
 
   cv::imwrite("reverse0.png",
       reverse_transfrormed_images[0]);
