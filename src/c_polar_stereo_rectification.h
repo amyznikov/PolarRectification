@@ -70,13 +70,19 @@ public: // public interface
    * @brief Example of usage of forwad mapping
    * */
   void remap(cv::InputArray src1, cv::OutputArray dst1,
-      cv::InputArray src2, cv::OutputArray dst2) const;
+      cv::InputArray src2, cv::OutputArray dst2,
+      int interpolation = cv::INTER_LINEAR,
+      int border_mode = cv::BORDER_CONSTANT,
+      const cv::Scalar & border_value = cv::Scalar::all(0)) const;
 
   /**
    * @brief Example of usage of reverse mapping
    * */
   void unmap(cv::InputArray src1, cv::OutputArray dst1,
-      cv::InputArray src2, cv::OutputArray dst2) const;
+      cv::InputArray src2, cv::OutputArray dst2,
+      int interpolation = cv::INTER_LINEAR,
+      int border_mode = cv::BORDER_CONSTANT,
+      const cv::Scalar & border_value = cv::Scalar::all(-1)) const;
 
 public: // utility subroutines, not a real part of public interface
 

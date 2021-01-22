@@ -956,15 +956,19 @@ bool c_polar_stereo_rectification::compute(const cv::Matx33d & input_fundamental
  * @brief Example of usage of forwad mapping
  * */
 void c_polar_stereo_rectification::remap(cv::InputArray src1, cv::OutputArray dst1,
-    cv::InputArray src2, cv::OutputArray dst2) const
+    cv::InputArray src2, cv::OutputArray dst2,
+    int interpolation,
+    int border_mode,
+    const cv::Scalar & border_value) const
 {
   if ( !src1.empty() && dst1.needed() ) {
 
     cv::remap(src1, dst1,
         forward_map(0),
         cv::noArray(),
-        cv::INTER_LINEAR,
-        cv::BORDER_CONSTANT);
+        interpolation,
+        border_mode,
+        border_value);
 
   }
 
@@ -973,8 +977,9 @@ void c_polar_stereo_rectification::remap(cv::InputArray src1, cv::OutputArray ds
     cv::remap(src2, dst2,
         forward_map(1),
         cv::noArray(),
-        cv::INTER_LINEAR,
-        cv::BORDER_CONSTANT);
+        interpolation,
+        border_mode,
+        border_value);
 
   }
 }
@@ -984,15 +989,19 @@ void c_polar_stereo_rectification::remap(cv::InputArray src1, cv::OutputArray ds
  * @brief Example of usage of reverse mapping
  * */
 void c_polar_stereo_rectification::unmap(cv::InputArray src1, cv::OutputArray dst1,
-    cv::InputArray src2, cv::OutputArray dst2) const
+    cv::InputArray src2, cv::OutputArray dst2,
+    int interpolation,
+    int border_mode,
+    const cv::Scalar & border_value) const
 {
   if ( !src1.empty() && dst1.needed() ) {
 
     cv::remap(src1, dst1,
         reverse_map(0),
         cv::noArray(),
-        cv::INTER_LINEAR,
-        cv::BORDER_CONSTANT);
+        interpolation,
+        border_mode,
+        border_value);
 
   }
 
@@ -1001,8 +1010,9 @@ void c_polar_stereo_rectification::unmap(cv::InputArray src1, cv::OutputArray ds
     cv::remap(src2, dst2,
         reverse_map(1),
         cv::noArray(),
-        cv::INTER_LINEAR,
-        cv::BORDER_CONSTANT);
+        interpolation,
+        border_mode,
+        border_value);
   }
 }
 
