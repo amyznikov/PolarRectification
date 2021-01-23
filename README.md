@@ -32,10 +32,3 @@ Example images:
 ![test-images/2011_09_26_drive_0005_sync-83-84/2011_09_26_drive_0005_sync-83-84-polar.gif](test-images/2011_09_26_drive_0005_sync-83-84/2011_09_26_drive_0005_sync-83-84-polar.gif)
 
 
---
-
-![test-images/India/India.gif](test-images/India/India.gif)
-
-![test-images/India/India-polar.gif](test-images/India/India-polar.gif)
-
-
